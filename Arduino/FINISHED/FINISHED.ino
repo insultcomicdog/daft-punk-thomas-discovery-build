@@ -401,7 +401,7 @@ case(13):*maxframes=9; //Space
  case(14): //Fancy Sauce
         *DISPDELAY=0;
         *typeanimation=0;
-        msg="THIS IS A GREAT LED MATRIX....FOR ME TO POOP ON!";
+        msg="THIS IS A GREAT LED MATRIX....FOR ME TO POOP ON!!";
         *background=0;
         break;    
 case(15): //HAPPY HALLOWEEN
