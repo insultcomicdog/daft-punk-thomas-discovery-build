@@ -1,8 +1,66 @@
+#include <SPI.h>
+#include "Adafruit_BLE_UART.h"
+
+#define ADAFRUITBLE_REQ 11
+#define ADAFRUITBLE_RDY 3
+#define ADAFRUITBLE_RST 9
+
+Adafruit_BLE_UART uart = Adafruit_BLE_UART(ADAFRUITBLE_REQ, ADAFRUITBLE_RDY, ADAFRUITBLE_RST);
+
+//gauntlet vars
+volatile byte sensorID;
+volatile byte sensorValue;
+volatile boolean newSensorValue = false;
+
+const int animateID = 0;
+int animationValue = 0;
+
+const byte micID = 1;
+byte micValue = 0;
+
+const byte switchAnimationID = 2;
+byte switchAnimationValue = 0;
+
+const byte earModeID = 3;
+byte earModeValue = 1;
+
+const byte earRedID = 4;
+byte earRedValue = 0;
+
+const byte earGreenID = 5;
+byte earGreenValue = 0;
+
+const byte earBlueID = 6;
+byte earBlueValue = 0;
+
+const int eqID = 7;
+byte eqValue = 0;
+
+const int fanID = 8;
+byte fanValue = 0;
+
+const int mp3ID = 9;
+byte mp3Value = 0;
+//gauntlet vars
+
+#define EQ_NEXT_PIN 22
+#define EQ_PREV_PIN 24
+#define EQ_SPEED_UP_PIN 26
+#define EQ_SPEED_DOWN_PIN 28
+
+#define EQ_POWER_PIN 47
+#define FAN_POWER_PIN 45
+#define MP3_POWER_PIN 43
+
 #include <Adafruit_NeoPixel.h>
 
 #define PIN_RIGHT_EAR 4
-#define PIN_LEFT_EAR 5 
+#define PIN_LEFT_EAR 5
 uint16_t colourIndex = 0 ;
+unsigned long interval=50;  // the time we need to wait
+unsigned long previousMillis=0;
+uint16_t currentPixel = 0;// what pixel are we operating on
+uint16_t currentColour = 0;
 
 // Parameter 1 = number of pixels in right_ear
 // Parameter 2 = pin number (most are valid)
@@ -13,6 +71,29 @@ uint16_t colourIndex = 0 ;
 //   NEO_RGB     Pixels are wired for RGB bitstream (v1 FLORA pixels, not v2)
 Adafruit_NeoPixel right_ear = Adafruit_NeoPixel(24, PIN_RIGHT_EAR, NEO_GRB + NEO_KHZ800);
 Adafruit_NeoPixel left_ear = Adafruit_NeoPixel(24, PIN_LEFT_EAR, NEO_GRB + NEO_KHZ800);
+
+//ear ripple effect vars
+int color;
+int center = 0;
+int step = -1;
+int maxSteps = 16;
+float fadeRate = 0.6;
+int diff;
+
+//background color
+uint32_t currentBg = random(256);
+uint32_t nextBg = currentBg;
+
+//ear ripple effect vars
+
+//ear kaleidoscope effect vars
+uint8_t  offset = 0; // Position of spinny eyes
+uint32_t prevTime;
+//ear kaleidoscope effect vars
+
+//larsons effect vars
+int larsonCount;
+boolean larsonGoBack = false;
 
 #define N_PIXELS  24  // Number of pixels in strand
 #define DC_OFFSET  0  // DC offset in mic signal - if unusure, leave 0
@@ -72,7 +153,7 @@ inputs than others.  miThe software works at making the graph interesting,
 but some columns will always be less lively than others, especially
 comparing live speech against ambient music of varying genres.
 */
-PROGMEM uint8_t
+static const uint8_t PROGMEM
   // This is low-level noise that's subtracted from each FFT output column:
   noise[64]={ 8,6,6,5,3,4,4,4,3,4,4,3,2,3,3,4,
               2,1,2,1,3,2,3,2,1,2,3,1,2,3,4,4,
@@ -112,7 +193,7 @@ PROGMEM uint8_t
      77,  60,  45,  34,  25,  18,  13,   9,   7,   5,
       3,   2,   2,   1,   1,   1,   1 },
   // And then this points to the start of the data for each of the columns:
-  *colData[] = {
+ * const colData[]  = {
     col0data, col1data, col2data, col3data,
     col4data, col5data, col6data, col7data };
 
@@ -122,14 +203,23 @@ char EQ_BAR [] = {0b1111, 0b1111, 0b1111, 0b1111, 0b1111, 0b1111, 0b1111, 0b1111
 #define EQ_BAR_HEIGHT 	 8
 
 int barXPositions [] = {0,4,8,12,16,20,24,28};
-int micSwitchPin = 2;  
+//int micSwitchPin = 2;  
 boolean useMic = false;
-
+boolean useMicBlue = false;
+boolean skipAnim = false;
+boolean useEars = true;
 
 /////////
 //animation imports and vars
 
-#include <WProgram.h>
+
+#if defined(ARDUINO) && ARDUINO >= 100  
+#include "Arduino.h"  
+#else  
+#include "WProgram.h"  
+#endif  
+
+#define __PROG_TYPES_COMPAT__
 #include <avr/pgmspace.h>
 #include "font3.h"
 #include "myfont.h"
@@ -166,9 +256,29 @@ int animCounter = 0;  //tek
 
 
 void setup () {
+  Wire.begin(4);                // join i2c bus with address #4
+  Wire.onReceive(receiveEvent); // register event
   Serial.begin(9600);
+  Serial.println("setup"); 
   
-  Serial.println("setup");
+  pinMode(EQ_NEXT_PIN, OUTPUT);
+  pinMode(EQ_PREV_PIN, OUTPUT);
+  pinMode(EQ_SPEED_UP_PIN, OUTPUT);
+  pinMode(EQ_SPEED_DOWN_PIN, OUTPUT);
+  pinMode(EQ_POWER_PIN, OUTPUT);
+
+  digitalWrite(EQ_NEXT_PIN, HIGH);  
+  digitalWrite(EQ_PREV_PIN, HIGH);  
+  digitalWrite(EQ_SPEED_UP_PIN, HIGH);  
+  digitalWrite(EQ_SPEED_DOWN_PIN, HIGH);  
+  digitalWrite(EQ_POWER_PIN, LOW);  
+  
+  pinMode(FAN_POWER_PIN, OUTPUT);
+  digitalWrite(FAN_POWER_PIN, LOW);
+  
+  pinMode(MP3_POWER_PIN, OUTPUT);
+  digitalWrite(MP3_POWER_PIN, LOW);
+  
   sayHi();
   HT1632.begin(8, 7, 6);
   
@@ -176,7 +286,7 @@ void setup () {
 //  Serial.begin(9600);
 //  cls();
   
-  pinMode(micSwitchPin, INPUT_PULLUP);
+//  pinMode(micSwitchPin, INPUT_PULLUP);
 
 
 //  HT1632.clear();
@@ -228,17 +338,21 @@ void setup () {
   left_ear.begin();
   left_ear.show(); // Initialize all pixels to 'off'
   
+  
+  // Initialize Bluetooth LE breakout
+  uart.setRXcallback(rxCallback);
+  uart.setACIcallback(aciCallback);
+  uart.begin();
+  
+
+
+  Serial.println("end of init");
+  
 }
 
 void loop () {
   
-  if(digitalRead (micSwitchPin)  == HIGH){
-      useMic = true;
-   } else {
-      useMic = false;
-   }
-  
-   if(useMic){
+   if(useMic || useMicBlue){
        
       uint8_t  i, x, L, *data, nBins, binNum, weighting, c;
       uint16_t minLvl, maxLvl;
@@ -352,8 +466,8 @@ void loop () {
             left_ear.setPixelColor(i,   0,   0, 0);
           }
           else {
-            right_ear.setPixelColor(i,Wheel(map(i,0,right_ear.numPixels()-1,30,150)));
-            left_ear.setPixelColor(i,Wheel(map(i,0,left_ear.numPixels()-1,30,150)));
+            right_ear.setPixelColor(i,Wheel(map(i,0,right_ear.numPixels()-1,30,150), 1));
+            left_ear.setPixelColor(i,Wheel(map(i,0,left_ear.numPixels()-1,30,150), 1));
           }
           
         }
@@ -362,8 +476,8 @@ void loop () {
        
         // Draw peak dot  
         if(earPeak > 0 && earPeak <= N_PIXELS-1) {
-          right_ear.setPixelColor(earPeak,Wheel(map(earPeak,0,right_ear.numPixels()-1,30,150)));
-          left_ear.setPixelColor(earPeak,Wheel(map(earPeak,0,right_ear.numPixels()-1,30,150)));
+          right_ear.setPixelColor(earPeak,Wheel(map(earPeak,0,right_ear.numPixels()-1,30,150), 1));
+          left_ear.setPixelColor(earPeak,Wheel(map(earPeak,0,right_ear.numPixels()-1,30,150), 1));
         }
       
          right_ear.show(); // Update strip
@@ -398,18 +512,13 @@ void loop () {
         earMinLvlAvg = (earMinLvlAvg * 63 + minLvl) >> 6; // Dampen min/max levels
         earMaxLvlAvg = (earMaxLvlAvg * 63 + maxLvl) >> 6; // (fake rolling average)
         
+        uart.pollACI();
+        
+        checkMicPin();
+        
     } else {
-        displayScrollingLine();
-    
-//        // Some example procedures showing how to display to the pixels:
-//        colorWipe(right_ear.Color(255, 0, 0), 50); // Red
-//        colorWipe(right_ear.Color(0, 255, 0), 50); // Green
-//        colorWipe(right_ear.Color(0, 0, 255), 50); // Blue
-//        
-//        rainbow(20);
-//        rainbowCycle(20);
+      displayScrollingLine(); 
     }
-
 } 
 
 ISR(ADC_vect) { // Audio-sampling interrupt
@@ -712,7 +821,7 @@ case(3):*maxframes=27; //OK
         *loops=1;
         *typeanimation=1;
         break;
-case(4):*maxframes=2; //corazon
+case(4):*maxframes=10; //corazon
         *DISPDELAY=500*DISPDELAYMULTIPLIER;
         *framestart=104;
         *loops=4;
@@ -730,15 +839,15 @@ case(6): //DAFT PUNK
         msg="      DAFT PUNK";
         *background=1;
         break;
-case(7): //SLAMFIELD
+case(7): //HARDER, BETTER, FASTER, STRONGER
         *DISPDELAY=0;
         *typeanimation=0;
-        msg="      SLAMFIELD";
+        msg="      HARDER, BETTER, FASTER, STRONGER";
         *background=1;
         break;  
 case(8):*maxframes=61; //kit
         *DISPDELAY=0;
-        *framestart=106;
+        *framestart=114;
         *loops=3;
         *typeanimation=1;
         break;
@@ -758,54 +867,113 @@ case(10): //|||||
         break;
 case(11):*maxframes=63; //Cardiograma
         *DISPDELAY=0;
-        *framestart=167;
+        *framestart=175;
         *loops=4;
         *typeanimation=1;
         break;
-case(12):*maxframes=5; //Ventanas
+case(12):*maxframes=25; //Ventanas
         *DISPDELAY=500*DISPDELAYMULTIPLIER;
-        *framestart=230;
+        *framestart=238;
         *loops=1;
         *typeanimation=1;
         break;
-case(13):*maxframes=9; //Space
+case(13):*maxframes=45; //Space
         *DISPDELAY=250*DISPDELAYMULTIPLIER;
-        *framestart=235;
+        *framestart=263;
         *loops=1;
         *typeanimation=1;
         break;    
  case(14): //Fancy Sauce
         *DISPDELAY=0;
         *typeanimation=0;
-        msg="THIS IS A GREAT LED MATRIX....FOR ME TO POOP ON!!";
+        //msg="      THIS IS A GREAT LED MATRIX....FOR ME TO POOP ON!!";
+        msg="      MAKER FAIRE IS THE GREATEST SHOW (AND TELL) ON EARTH.";
         *background=0;
         break;    
 case(15): //HAPPY HALLOWEEN
         *DISPDELAY=0;
         *typeanimation=0;
-        msg="   HAPPY HALLOWEEN";
+        msg="      MAKER FAIRE OTTAWA 2015";
         *background=1;
         break;      
   }}
+  
+
+void renderEarAnimations()
+{ 
+  if(useEars){
+     if(earModeValue==1){
+      //clearEarAnimations();
+      rainbowCycleCustom();
+    } else if(earModeValue==2){
+      //clearEarAnimations();
+      colorWipe();
+    } else if(earModeValue==3){
+       //clearEarAnimations();
+      ripple();
+    } else if(earModeValue==4){
+      kaleidoscope();
+      //knightRider();
+    } else if(earModeValue==5){
+  //  clearEarAnimations();
+      manualEarColour();
+    }
+  }
+}
+
+void clearEarAnimations()
+{ 
+  uint16_t i;
+  
+  for(i=0; i< right_ear.numPixels(); i++) {
+      right_ear.setPixelColor(i, 0);
+      left_ear.setPixelColor(i, 0);
+  }
+  right_ear.show();
+  left_ear.show();
+}
+
+
 /*
 * This works equally well for both 16x24 and 8x32 matrices.
 */
 void displayScrollingLine()
 {
   
-  Serial.println(DISPDELAY);  
-  
-  // shift the whole screen 6 times, one column at a time;
-  if (animCounter >=15){animCounter=0;}else{animCounter++;} //tek. Plays all 14 sequences sequentially instead of random
+  if(skipAnim){
+      skipAnim=false;
+  } else {
+    // shift the whole screen 6 times, one column at a time;
+      if (animCounter >=15){animCounter=0;}else{animCounter++;} //tek. Plays all 14 sequences sequentially instead of random
+  }
   
   animationinfo(animCounter,&maxframes,&loops,&framestart,&DISPDELAY,&typeanimation,&background);
   if(typeanimation==1)
   {
   for(n=0;n<loops;n++)
   {
+    
+    if(useMic || useMicBlue){
+    Serial.println("EXIT MODE NOW");
+    break;
+   }
+   
+   if(skipAnim){
+     break;
+   }
+   
   for(frame=0;frame<maxframes;frame++)
   {
-
+    
+    if(useMic || useMicBlue){
+    Serial.println("EXIT MODE NOW");
+    break;
+   }
+   
+   if(skipAnim){
+     break;
+   }
+    
   for (byte row=0; row<32; row++)
   {  byte rowDots = pgm_read_byte_near(&myfont[frame+framestart][row]);
     
@@ -816,15 +984,38 @@ void displayScrollingLine()
       else
         plot(row, col, 0);
     }
-  }
-  
-  rainbowCycleCustom(0);
-  delay(DISPDELAY);
 
+  }
+
+  //Serial.println(millis());
+  //Serial.println(previousMillis);
+  //Serial.println((millis() - previousMillis));
+  //Serial.println(DISPDELAY);
+
+//  previousMillis = DISPDELAY;
+//  
+//  while (previousMillis > 0){
+//    previousMillis--;
+//   Serial.println("waiting");
+//   Serial.println(previousMillis);
+//  }
+  
+   onEnterFrame();
+  //delay(DISPDELAY);
 }}}
 else
 { while(1)
 {
+  
+  if(useMic || useMicBlue){
+      Serial.println("EXIT MODE NOW");
+      break;
+   }
+  
+  if(skipAnim){
+     break;
+   }
+  
   // shift the whole screen 6 times, one column at a time;   
   for (int x=0; x < 6; x++)   
   {   
@@ -836,8 +1027,7 @@ else
     ht1632_putchar(-x+30, 0, ((crtPos+5 < strlen(msg)) ? msg[crtPos+5] : ' '),background);  
     ht1632_putchar(-x+36, 0, ((crtPos+6 < strlen(msg)) ? msg[crtPos+6] : ' '),background);
     
-    rainbowCycleCustom(0);
-    delay(DISPDELAY);   
+    onEnterFrame();
   }   
   
   crtPos++;   
@@ -848,79 +1038,462 @@ else
 }   }}
 }
 
-// Fill the dots one after the other with a color
-void colorWipe(uint32_t c, uint8_t wait) {
-  for(uint16_t i=0; i<right_ear.numPixels(); i++) {
-      right_ear.setPixelColor(i, c);
-      right_ear.show();
-      
-      left_ear.setPixelColor(i, c);
-      left_ear.show();
-      
-      delay(wait);
-  }
+
+void onEnterFrame() {
+  renderEarAnimations();
+  uart.pollACI();
+  checkMicPin();
 }
 
-void rainbow(uint8_t wait) {
-  uint16_t i, j;
-
-  for(j=0; j<256; j++) {
-    for(i=0; i<right_ear.numPixels(); i++) {
-      right_ear.setPixelColor(i, Wheel((i+j) & 255));
-      left_ear.setPixelColor(i, Wheel((i+j) & 255));
-    }
-    right_ear.show();
-    left_ear.show();
-    delay(wait);
-  }
+void checkMicPin() {
+//  if(digitalRead (micSwitchPin)  == HIGH ){
+//      useMic = true;
+//   } else {
+//      useMic = false;
+//   }
 }
 
-// Slightly different, this makes the rainbow equally distributed throughout
-void rainbowCycle(uint8_t wait) {
-  uint16_t i, j;
-
-  for(j=0; j<256*5; j++) { // 5 cycles of all colors on wheel
-    for(i=0; i< right_ear.numPixels(); i++) {
-      right_ear.setPixelColor(i, Wheel(((i * 256 / right_ear.numPixels()) + j) & 255));
-      left_ear.setPixelColor(i, Wheel(((i * 256 / right_ear.numPixels()) + j) & 255));
-    }
-    right_ear.show();
-    left_ear.show();
-    delay(wait);
-  }
-}
-
-void rainbowCycleCustom(uint8_t wait) {
-  uint16_t i;
-  
-  colourIndex+=10;
-  
-  if(colourIndex>256){
-    colourIndex=0;
-  }
-
-  for(i=0; i< right_ear.numPixels(); i++) {
-    right_ear.setPixelColor(i, Wheel(((i * 256 / right_ear.numPixels()) + colourIndex) & 255));
-    left_ear.setPixelColor(i, Wheel(((i * 256 / right_ear.numPixels()) + colourIndex) & 255));
-  }
+void rainbowCycleCustom() {
+  right_ear.setPixelColor(currentPixel, Wheel(((currentPixel * 256 / right_ear.numPixels())+currentColour) & 255, 1 ));
+  left_ear.setPixelColor(currentPixel, Wheel(((currentPixel * 256 / right_ear.numPixels())+currentColour) & 255, 1 ));
   right_ear.show();
   left_ear.show();
-  delay(wait);
+
+  currentColour++;
+  if(currentColour >= 256){
+    currentColour = 0;
+  }
+  
+  currentPixel++;
+  if(currentPixel == right_ear.numPixels()){
+    currentPixel = 0;
+  }
+}
+
+// Fill the dots one after the other with a color
+void colorWipe() {
+  right_ear.setPixelColor(currentPixel,  Wheel(currentColour, 1 ));
+  left_ear.setPixelColor(currentPixel, Wheel(currentColour, 1 ));
+  right_ear.show();
+  left_ear.show();
+
+  currentPixel++;
+  if(currentPixel == right_ear.numPixels()){
+     currentColour+=64;
+      if(currentColour == 256){
+         currentColour = 0;
+      }
+  
+    currentPixel = 0;
+  }
+}
+
+void ripple() {
+  
+// randomize bg colour
+
+//  if (currentBg == nextBg) {
+//    nextBg = random(256);
+//  } 
+//  else if (nextBg > currentBg) {
+//    currentBg++;
+//  } else {
+//    currentBg--;
+//  }
+//
+//  for(uint16_t l = 0; l < right_ear.numPixels(); l++) {
+//    right_ear.setPixelColor(l, Wheel(currentBg, 0.1));
+//    left_ear.setPixelColor(l, Wheel(currentBg, 0.1));
+//  }
+  
+// manually set bg colour with red pot  
+  for(uint16_t l = 0; l < right_ear.numPixels(); l++) {
+    right_ear.setPixelColor(l, Wheel(earRedValue, 0.1));
+    left_ear.setPixelColor(l, Wheel(earRedValue, 0.1));
+  }
+ 
+  if (step == -1) {
+    center = random(right_ear.numPixels());
+    color = random(256);
+    step = 0;
+  }
+ 
+  if (step == 0) {
+    right_ear.setPixelColor(center, Wheel(color, 1));
+    left_ear.setPixelColor(center, Wheel(color, 1));
+    step ++;
+  } 
+  else {
+    if (step < maxSteps) {
+      right_ear.setPixelColor(wrap(center + step), Wheel(color, pow(fadeRate, step)));
+      left_ear.setPixelColor(wrap(center + step), Wheel(color, pow(fadeRate, step)));
+      right_ear.setPixelColor(wrap(center - step), Wheel(color, pow(fadeRate, step)));
+      left_ear.setPixelColor(wrap(center - step), Wheel(color, pow(fadeRate, step)));
+      if (step > 3) {
+        right_ear.setPixelColor(wrap(center + step - 3), Wheel(color, pow(fadeRate, step - 2)));
+        right_ear.setPixelColor(wrap(center - step + 3), Wheel(color, pow(fadeRate, step - 2)));
+        
+        left_ear.setPixelColor(wrap(center + step - 3), Wheel(color, pow(fadeRate, step - 2)));
+        left_ear.setPixelColor(wrap(center - step + 3), Wheel(color, pow(fadeRate, step - 2)));
+      }
+      step ++;
+    } 
+    else {
+      step = -1;
+    }
+  }
+  
+  right_ear.show();
+  left_ear.show();
+}
+ 
+ 
+int wrap(int step) {
+  if(step < 0) return right_ear.numPixels() + step;
+  if(step > right_ear.numPixels() - 1) return step - right_ear.numPixels();
+  return step;
+}
+
+
+void kaleidoscope () {
+//  uint8_t  i;
+//  for(i=0; i<right_ear.numPixels(); i++) {
+//      uint32_t c = 0;
+//      if(((offset + i) & 7) < 2) c = kaleidoscopeColour; // 4 pixels on...
+//      right_ear.setPixelColor(i, c); // First eye
+//      left_ear.setPixelColor((right_ear.numPixels()-1)-i, c); //Second eye (flipped)
+//    }
+//    right_ear.show();
+//    left_ear.show();
+//    offset++;
+    
+  uint8_t  i;
+  
+  for(i=0; i<right_ear.numPixels(); i++) {
+    uint32_t c = 0;
+    if(((offset + i) & 7) < 2) c = Wheel(earRedValue, 1); // 4 pixels on...
+    right_ear.setPixelColor(i, c); // First eye
+    left_ear.setPixelColor((right_ear.numPixels()-1)-i, c); //Second eye (flipped)
+  }
+  
+  right_ear.show();
+  left_ear.show();
+  offset++;
+}
+
+// Cycles - one cycle is scanning through all pixels left then right (or right then left)
+// Speed - how fast one cycle is (32 with 16 pixels is default KnightRider speed)
+// Width - how wide the trail effect is on the fading out LEDs.  The original display used
+//         light bulbs, so they have a persistance when turning off.  This creates a trail.
+//         Effective range is 2 - 8, 4 is default for 16 pixels.  Play with this.
+// Color - 32-bit packed RGB color value.  All pixels will be this color.
+// knightRider(cycles, speed, width, color);
+void knightRider() {
+  uint32_t old_val[right_ear.numPixels()]; // up to 256 lights!
+  // Larson time baby!
+    if(larsonCount < right_ear.numPixels() && larsonGoBack == false){
+      right_ear.setPixelColor(larsonCount, 0xFF0000);
+      left_ear.setPixelColor(larsonCount, 0xFF0000);
+
+      old_val[larsonCount] = 0xFF0000;
+      for(int x = larsonCount; x>0; x--) {
+        old_val[x-1] = dimColor(old_val[x-1], 4);
+        right_ear.setPixelColor(x-1, old_val[x-1]); 
+        left_ear.setPixelColor(x-1, old_val[x-1]); 
+      }
+      right_ear.show();
+      left_ear.show();
+      
+      larsonCount++;   
+    } 
+    
+    else {
+      
+      if(larsonCount == 0){
+        larsonGoBack = false;
+      } else{
+        larsonGoBack = true; 
+         larsonCount--;
+      }
+       
+      right_ear.setPixelColor(larsonCount, 0xFF0000);
+      left_ear.setPixelColor(larsonCount, 0xFF0000);
+      
+      old_val[larsonCount] = 0xFF0000;
+      for(int x = larsonCount; x<=right_ear.numPixels() ;x++) {
+        old_val[x-1] = dimColor(old_val[x-1], 4);
+        right_ear.setPixelColor(x+1, old_val[x+1]);
+        left_ear.setPixelColor(x+1, old_val[x+1]);
+      }
+      right_ear.show();
+      left_ear.show();
+    }
+}
+
+uint32_t dimColor(uint32_t color, uint8_t width) {
+   return (((color&0xFF0000)/width)&0xFF0000) + (((color&0x00FF00)/width)&0x00FF00) + (((color&0x0000FF)/width)&0x0000FF);
+}
+
+void manualEarColour(){
+   uint8_t  i;
+   
+  for(i=0; i<right_ear.numPixels(); i++) {
+    right_ear.setPixelColor(i, earRedValue, earGreenValue, earBlueValue);
+    left_ear.setPixelColor(i, earRedValue, earGreenValue, earBlueValue);
+  }
+   
+  right_ear.show();
+  left_ear.show();
 }
 
 // Input a value 0 to 255 to get a color value.
 // The colours are a transition r - g - b - back to r.
-uint32_t Wheel(byte WheelPos) {
+uint32_t Wheel(byte WheelPos, float opacity) {
   if(WheelPos < 85) {
-   return right_ear.Color(WheelPos * 3, 255 - WheelPos * 3, 0);
-   return left_ear.Color(WheelPos * 3, 255 - WheelPos * 3, 0);
+   return right_ear.Color((WheelPos * 3) * opacity, (255 - WheelPos * 3) * opacity, 0);
+   return left_ear.Color((WheelPos * 3) * opacity, (255 - WheelPos * 3) * opacity, 0);
   } else if(WheelPos < 170) {
    WheelPos -= 85;
-   return right_ear.Color(255 - WheelPos * 3, 0, WheelPos * 3);
-   return left_ear.Color(255 - WheelPos * 3, 0, WheelPos * 3);
+   return right_ear.Color((255 - WheelPos * 3) * opacity, 0, (WheelPos * 3) * opacity);
+   return left_ear.Color((255 - WheelPos * 3) * opacity, 0, (WheelPos * 3) * opacity);
   } else {
    WheelPos -= 170;
-   return right_ear.Color(0, WheelPos * 3, 255 - WheelPos * 3);
-   return left_ear.Color(0, WheelPos * 3, 255 - WheelPos * 3);
+   return right_ear.Color(0, (WheelPos * 3) * opacity, (255 - WheelPos * 3) * opacity);
+   return left_ear.Color(0, (WheelPos * 3) * opacity, (255 - WheelPos * 3) * opacity);
   }
 }
+
+/**************************************************************************/
+/*!
+    This function is called whenever select ACI events happen
+*/
+/**************************************************************************/
+void aciCallback(aci_evt_opcode_t event)
+{
+  switch(event)
+  {
+    case ACI_EVT_DEVICE_STARTED:
+      Serial.println(F("Advertising started"));
+      break;
+    case ACI_EVT_CONNECTED:
+      Serial.println(F("Connected!"));
+      break;
+    case ACI_EVT_DISCONNECTED:
+      Serial.println(F("Disconnected or advertising timed out"));
+      break;
+    default:
+      break;
+  }
+}
+
+/**************************************************************************/
+/*!
+    This function is called whenever data arrives on the RX channel
+*/
+/**************************************************************************/
+void rxCallback(uint8_t *buffer, uint8_t len)
+{
+  Serial.print(F("Received "));
+  Serial.print(len);
+  Serial.print(F(" bytes: "));
+  for(int i=0; i<len; i++)
+   Serial.print((char)buffer[i]); 
+
+  Serial.print(F(" ["));
+
+  for(int i=0; i<len; i++)
+  {
+    Serial.print(" 0x"); Serial.print((char)buffer[i], HEX); 
+  }
+  Serial.println(F(" ]"));
+  
+  if((char)buffer[0]==0x6D){
+   Serial.print("switch mode");
+
+   
+   if(useMicBlue == true){
+     useMicBlue=false;
+   } else if (useMicBlue==false){
+      useMicBlue=true;
+   }
+   
+   Serial.print("useMicBlue");
+   Serial.print(useMicBlue);
+   
+  } else {
+   Serial.print("do nothing");
+  }
+
+  /* Echo the same data back! */
+  uart.write(buffer, len);
+}
+
+
+// function that executes whenever data is received from master
+// this function is registered as an event, see setup()
+void receiveEvent(int howMany)
+{
+  
+  // Two bytes are transmitted, therefor howMany must be 2
+  if( howMany == 2)
+  {
+    sensorID = Wire.read();
+    sensorValue = Wire.read();
+    newSensorValue = true;
+    gauntletEventParser();
+    Serial.print("****"); 
+    Serial.println("sensorID");
+    Serial.println(sensorID);
+    Serial.println("sensorValue");
+    Serial.println(sensorValue);
+  }
+  else
+  {
+    // something is wrong, illegal number of bytes received.
+  }
+}
+
+void gauntletEventParser()
+{
+  
+  if(newSensorValue){
+    newSensorValue=false;
+    
+    if(sensorID == animateID){
+      animationValue = sensorValue;
+      useMic = false;
+    } else if(sensorID == micID){
+      micValue = sensorValue;
+      useMic = true;
+    } else if(sensorID == switchAnimationID){
+      switchAnimationValue = sensorValue;
+      
+      //if (switchAnimationValue == 1){goNextAnimation();}else{goPreviousAnimation();}
+      
+      goToAnimation(switchAnimationValue);
+      
+    } else if(sensorID == earModeID){
+      earModeValue = sensorValue;
+    } else if(sensorID == earRedID){
+      earRedValue = sensorValue;
+    } else if(sensorID == earGreenID){
+      earGreenValue = sensorValue;
+    } else if(sensorID == earBlueID){
+      earBlueValue = sensorValue;
+    } else if(sensorID == eqID){
+      eqValue = sensorValue;
+
+      if(eqValue == 0){
+         Serial.print("turn EQ off"); 
+         digitalWrite(EQ_POWER_PIN, HIGH); 
+         delay(1000);  
+         digitalWrite(EQ_NEXT_PIN, LOW);  
+         digitalWrite(EQ_PREV_PIN, LOW);  
+         digitalWrite(EQ_SPEED_UP_PIN, LOW);  
+         digitalWrite(EQ_SPEED_DOWN_PIN, LOW);  
+         useEars = false;
+         clearEarAnimations();
+      } else if(eqValue == 1){
+         Serial.print("turn EQ on"); 
+         digitalWrite(EQ_POWER_PIN, LOW); 
+         delay(1000); 
+         digitalWrite(EQ_NEXT_PIN, HIGH);  
+         digitalWrite(EQ_PREV_PIN, HIGH);  
+         digitalWrite(EQ_SPEED_UP_PIN, HIGH);  
+         digitalWrite(EQ_SPEED_DOWN_PIN, HIGH);   
+         useEars = true;
+      } else if(eqValue == 2){
+        Serial.print("show next EQ mode"); 
+        
+//        digitalWrite(EQ_NEXT_PIN, HIGH);  
+//        digitalWrite(EQ_PREV_PIN, HIGH);  
+//        digitalWrite(EQ_SPEED_UP_PIN, HIGH);  
+//        digitalWrite(EQ_SPEED_DOWN_PIN, HIGH);  
+
+        digitalWrite(EQ_NEXT_PIN, LOW); 
+        delay(1000); 
+        digitalWrite(EQ_NEXT_PIN, HIGH);  
+  
+      } else if(eqValue == 3){
+        Serial.print("show prev EQ mode"); 
+        
+        digitalWrite(EQ_PREV_PIN, LOW);  
+        delay(1000); 
+        digitalWrite(EQ_PREV_PIN, HIGH);  
+          
+      } else if(eqValue == 4){
+        Serial.print("speed up EQ mode"); 
+        
+        digitalWrite(EQ_SPEED_DOWN_PIN, LOW);  
+        delay(1000); 
+        digitalWrite(EQ_SPEED_DOWN_PIN, HIGH);  
+        
+      } else if(eqValue == 5){
+        Serial.print("speed down EQ mode"); 
+        digitalWrite(EQ_SPEED_UP_PIN, LOW); 
+        delay(1000);  
+        digitalWrite(EQ_SPEED_UP_PIN, HIGH);  
+      }
+      
+    } else if(sensorID == fanID){
+      fanValue = sensorValue;
+  
+      if(fanValue == 0){
+         Serial.print("turn fan off");
+         digitalWrite(FAN_POWER_PIN, LOW); 
+      } else if(fanValue == 1){
+         Serial.print("turn fan on");
+         digitalWrite(FAN_POWER_PIN, HIGH); 
+      }   
+    } else if(sensorID == mp3ID){
+      mp3Value = sensorValue;
+  
+      if(mp3Value == 0){
+         Serial.print("turn mp3Value off");
+         digitalWrite(MP3_POWER_PIN, LOW); 
+      } else if(mp3Value == 1){
+         Serial.print("turn mp3Value on");
+         digitalWrite(MP3_POWER_PIN, HIGH); 
+      }   
+    }
+    
+//     Serial.print("sensorID"); 
+//     Serial.println(sensorID);   
+//     
+//     Serial.print("sensorValue"); 
+//     Serial.println(sensorValue);
+    }
+}
+
+void goToAnimation(byte id) {
+  Serial.println("goToAnimation");
+  skipAnim=true;
+  ht1632_clear();
+  animCounter = id;
+  Serial.println(animCounter);
+}
+
+void goNextAnimation() {
+  Serial.println("goNextAnimation");
+  skipAnim=true;
+  ht1632_clear();
+  
+  //delay(100);
+
+  if (animCounter >=15){animCounter=0;}else{animCounter++;}
+  Serial.println(animCounter);
+
+}
+
+void goPreviousAnimation() {
+  Serial.println("goPreviousAnimation");
+   skipAnim=true;
+   ht1632_clear();
+   
+   //delay(100);
+   
+   if (animCounter == 0){animCounter=15;}else{animCounter--;}
+   Serial.println(animCounter);
+
+}
+
