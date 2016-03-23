@@ -1,4 +1,3 @@
-daft-punk-thomas---subvisor-visualizer
-======================================
+Daft Punk Discovery Build
 
-daft punk thomas - subvisor visualizer
+Code and Parts for my Daft Punk Thomas Discovery build.
